@@ -1,0 +1,71 @@
+name: Release
+
+# When a pull request is merged into main, read the version from pubspec.yaml,
+# tag it (vX.Y.Z), build the APK and publish it as a GitHub release asset named
+# zm6-vX.Y.Z.apk. If the tag already exists nothing is released.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Read version from pubspec.yaml
+        id: ver
+        run: |
+          VERSION=$(grep -E '^version:' pubspec.yaml | sed -E 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          if [ -z "$VERSION" ]; then echo "version not found"; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if the tag already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/git/ref/tags/${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ steps.ver.outputs.tag }} already exists, skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.exists == 'false'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        if: steps.check.outputs.exists == 'false'
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build APK
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          flutter pub get
+          flutter build apk --release --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk "zm6-${{ steps.ver.outputs.tag }}.apk"
+
+      - name: Create tag and release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            "zm6-${{ steps.ver.outputs.tag }}.apk" \
+            --target "${{ github.event.pull_request.merge_commit_sha }}" \
+            --title "ZM6 ${{ steps.ver.outputs.tag }}" \
+            --notes "Release ${{ steps.ver.outputs.tag }}. See CHANGELOG.md for details."
