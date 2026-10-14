@@ -127,6 +127,7 @@ class Bm6 {
   BluetoothCharacteristic? _write;
   bool _running = false;
   Timer? _retryTimer;
+  StreamSubscription? _adapterSub;
   static const retryInterval = Duration(seconds: 15);
 
   Uint8List _aes(Uint8List data, bool enc) {
@@ -248,6 +249,14 @@ class Bm6 {
         Permission.locationWhenInUse,
       ].request();
       await _startForegroundService();
+      _watchAdapter();
+      if (!await _bluetoothOn()) {
+        status.value = 'Bluetooth is off';
+        _notify('Bluetooth is off');
+        _log('bluetooth is off, not scanning');
+        _running = false;
+        return;
+      }
       status.value = 'Scanning for BM6...';
       _log('scan started');
       await _scanSub?.cancel();
@@ -288,8 +297,13 @@ class Bm6 {
       _connSub = d.connectionState.listen((s) {
         if (s == BluetoothConnectionState.disconnected) {
           _log('disconnected');
-          status.value = 'Disconnected, retrying in 15 s';
-          _notify('Disconnected, searching for the sensor...');
+          final btOn =
+              FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
+          status.value =
+              btOn ? 'Disconnected, retrying in 15 s' : 'Bluetooth is off';
+          _notify(btOn
+              ? 'Disconnected, searching for the sensor...'
+              : 'Bluetooth is off');
           _cleanup().then((_) => _scheduleRetry());
         }
       });
@@ -440,8 +454,37 @@ class Bm6 {
   /// Retries scanning/connecting every 15 s while disconnected.
   void _scheduleRetry() {
     _retryTimer?.cancel();
+    if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.off) return;
     _retryTimer = Timer(retryInterval, () {
       if (_dev == null && !_running && !simulating.value) start();
+    });
+  }
+
+  /// Current adapter state, waiting briefly for the first real value.
+  Future<bool> _bluetoothOn() async {
+    try {
+      final st = await FlutterBluePlus.adapterState
+          .where((s) => s != BluetoothAdapterState.unknown)
+          .first
+          .timeout(const Duration(seconds: 5));
+      return st == BluetoothAdapterState.on;
+    } catch (_) {
+      return FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
+    }
+  }
+
+  /// Stops retrying while Bluetooth is off and resumes when it is turned on.
+  void _watchAdapter() {
+    _adapterSub ??= FlutterBluePlus.adapterState.listen((st) {
+      if (st == BluetoothAdapterState.on) {
+        if (_dev == null && !_running && !simulating.value) start();
+      } else if (st == BluetoothAdapterState.off) {
+        _retryTimer?.cancel();
+        if (!simulating.value) {
+          status.value = 'Bluetooth is off';
+          _notify('Bluetooth is off');
+        }
+      }
     });
   }
 

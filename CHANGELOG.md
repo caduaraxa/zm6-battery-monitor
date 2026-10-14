@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Foreground service with a silent notification, so the connection and the
   reconnection loop keep working with the app in the background.
 - "Clear history" action in the Bluetooth connection dialog (with confirmation).
+- No scanning or retrying while Bluetooth is off; the app resumes by itself when
+  Bluetooth is turned on.
 
 ### Changed
 - The refresh button only reconnects; it no longer clears the stored history.
