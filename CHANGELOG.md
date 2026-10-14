@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-10-14
+
+### Added
+- Automatic reconnection: when the sensor disconnects (for example when the car
+  is turned off) or is not found, the app retries every 15 seconds.
+- Foreground service with a silent notification, so the connection and the
+  reconnection loop keep working with the app in the background.
+- "Clear history" action in the Bluetooth connection dialog (with confirmation).
+
+### Changed
+- The refresh button only reconnects; it no longer clears the stored history.
+
 ## [0.2.0] - 2026-10-14
 
 ### Added

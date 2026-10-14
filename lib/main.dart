@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:pointycastle/api.dart' show KeyParameter;
@@ -14,7 +15,7 @@ import 'package:pointycastle/block/aes.dart' show AESEngine;
 import 'package:shared_preferences/shared_preferences.dart';
 
 const appName = 'ZM6 Battery Monitor';
-const appVersion = '0.2.0'; // keep in sync with pubspec.yaml
+const appVersion = '0.3.0'; // keep in sync with pubspec.yaml
 const repoUrl = 'https://github.com/caduaraxa/zm6-battery-monitor';
 
 /// Voltage ranges used by the gauge and the chart bands.
@@ -53,7 +54,30 @@ const chargeStatusLabels = {0: 'Normal', 1: 'Low voltage', 2: 'Charging'};
 
 final darkMode = ValueNotifier<bool>(false);
 
-void main() => runApp(ValueListenableBuilder<bool>(
+void main() {
+  FlutterForegroundTask.initCommunicationPort();
+  runApp(_app());
+}
+
+/// Foreground service task: does nothing, it only keeps the process (and the
+/// BLE connection / reconnection loop) alive while the app is in background.
+@pragma('vm:entry-point')
+void startCallback() {
+  FlutterForegroundTask.setTaskHandler(_KeepAliveHandler());
+}
+
+class _KeepAliveHandler extends TaskHandler {
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {}
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+}
+
+Widget _app() => ValueListenableBuilder<bool>(
       valueListenable: darkMode,
       builder: (_, dark, _) => MaterialApp(
         debugShowCheckedModeBanner: false,
@@ -64,7 +88,7 @@ void main() => runApp(ValueListenableBuilder<bool>(
         themeMode: dark ? ThemeMode.dark : ThemeMode.light,
         home: const HomePage(),
       ),
-    ));
+    );
 
 class StartInfo {
   final double voltage;
@@ -102,6 +126,8 @@ class Bm6 {
   StreamSubscription? _scanSub, _notifySub, _connSub;
   BluetoothCharacteristic? _write;
   bool _running = false;
+  Timer? _retryTimer;
+  static const retryInterval = Duration(seconds: 15);
 
   Uint8List _aes(Uint8List data, bool enc) {
     // single block, zero IV: CBC == ECB
@@ -221,6 +247,7 @@ class Bm6 {
         Permission.bluetoothConnect,
         Permission.locationWhenInUse,
       ].request();
+      await _startForegroundService();
       status.value = 'Scanning for BM6...';
       _log('scan started');
       await _scanSub?.cancel();
@@ -236,14 +263,16 @@ class Bm6 {
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
       await Future.delayed(const Duration(seconds: 1));
       if (_dev == null) {
-        status.value = 'BM6 not found';
+        status.value = 'BM6 not found, retrying in 15 s';
         _log('no BM6 found');
         _running = false;
+        _scheduleRetry();
       }
     } catch (e) {
       status.value = 'Error: $e';
       _log('error: $e');
       _running = false;
+      _scheduleRetry();
     }
   }
 
@@ -259,8 +288,9 @@ class Bm6 {
       _connSub = d.connectionState.listen((s) {
         if (s == BluetoothConnectionState.disconnected) {
           _log('disconnected');
-          status.value = 'Disconnected';
-          _cleanup();
+          status.value = 'Disconnected, retrying in 15 s';
+          _notify('Disconnected, searching for the sensor...');
+          _cleanup().then((_) => _scheduleRetry());
         }
       });
       final services = await d.discoverServices();
@@ -282,11 +312,13 @@ class Bm6 {
       await _send(0x07); // real-time stream
       deviceName.value = d.platformName.isNotEmpty ? d.platformName : 'BM6';
       status.value = 'Connected';
+      _notify('Connected to ${d.platformName.isNotEmpty ? d.platformName : 'BM6'}');
       _log('connected, notifications enabled');
     } catch (e) {
       status.value = 'Error: $e';
       _log('error: $e');
       await _cleanup();
+      _scheduleRetry();
     }
   }
 
@@ -405,6 +437,58 @@ class Bm6 {
     });
   }
 
+  /// Retries scanning/connecting every 15 s while disconnected.
+  void _scheduleRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = Timer(retryInterval, () {
+      if (_dev == null && !_running && !simulating.value) start();
+    });
+  }
+
+  Future<void> _startForegroundService() async {
+    try {
+      if (await FlutterForegroundTask.isRunningService) return;
+      await FlutterForegroundTask.requestNotificationPermission();
+      FlutterForegroundTask.init(
+        androidNotificationOptions: AndroidNotificationOptions(
+          channelId: 'zm6_connection',
+          channelName: 'ZM6 connection',
+          channelDescription: 'Keeps the sensor connection alive.',
+          channelImportance: NotificationChannelImportance.LOW,
+          priority: NotificationPriority.LOW,
+          playSound: false,
+          enableVibration: false,
+          onlyAlertOnce: true,
+        ),
+        iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: false,
+          playSound: false,
+        ),
+        foregroundTaskOptions: ForegroundTaskOptions(
+          eventAction: ForegroundTaskEventAction.nothing(),
+          allowWakeLock: true,
+        ),
+      );
+      await FlutterForegroundTask.startService(
+        serviceId: 601,
+        serviceTypes: [ForegroundServiceTypes.connectedDevice],
+        notificationTitle: appName,
+        notificationText: 'Searching for the sensor...',
+        callback: startCallback,
+      );
+    } catch (e) {
+      _log('foreground service error: $e');
+    }
+  }
+
+  Future<void> _notify(String text) async {
+    try {
+      if (await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.updateService(notificationText: text);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _cleanup() async {
     await _closeHistory();
     await _notifySub?.cancel();
@@ -416,6 +500,7 @@ class Bm6 {
   }
 
   Future<void> stop() async {
+    _retryTimer?.cancel();
     final d = _dev;
     await _cleanup();
     try {
@@ -498,9 +583,12 @@ class _HomePageState extends State<HomePage> {
             onPressed: () => setState(() => darkMode.value = !darkMode.value),
           ),
           IconButton(
-            tooltip: 'Clear history and reconnect',
+            tooltip: 'Reconnect',
             icon: const Icon(Icons.refresh),
-            onPressed: () => _confirmRefresh(context),
+            onPressed: () async {
+              await bm.stop();
+              bm.start();
+            },
           ),
         ],
       ),
@@ -726,13 +814,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _confirmRefresh(BuildContext context) {
+  void _confirmClear(BuildContext context) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Refresh'),
+        title: const Text('Clear history'),
         content: const Text(
-            'This clears the stored history of this device and reconnects.'),
+            'This deletes the stored history of this device. It cannot be undone.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
@@ -741,10 +829,8 @@ class _HomePageState extends State<HomePage> {
             onPressed: () async {
               Navigator.pop(context);
               await bm.clearHistory();
-              await bm.stop();
-              bm.start();
             },
-            child: const Text('Clear and reconnect'),
+            child: const Text('Clear'),
           ),
         ],
       ),
@@ -765,6 +851,12 @@ class _HomePageState extends State<HomePage> {
           'Address: ${d?.remoteId.str ?? '-'}',
         ].join('\n')),
         actions: [
+          TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _confirmClear(context);
+              },
+              child: const Text('Clear history')),
           TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'))

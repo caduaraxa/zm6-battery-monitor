@@ -34,7 +34,9 @@ This project is a Flutter port of
 - Light / dark mode
 - Built-in data simulation (play button, bottom left) to preview the UI without
   a sensor; the background changes while it is running
-- Auto-connects to the first device advertising as `BM6`
+- Auto-connects to the first device advertising as `BM6` and reconnects
+  automatically (every 15 s) when the connection is lost, also in the
+  background through a silent foreground-service notification
 
 ## Protocol
 
@@ -110,8 +112,8 @@ sulphation; keeping them above 70% is recommended for a long service life.
 
 Every reading is saved on the phone, per device (BLE address), and is never
 deleted automatically. The chart is preloaded with the latest samples when the
-app connects. The refresh button asks for confirmation and clears the stored
-history of the current device.
+app connects. The refresh button only reconnects; the history of the current
+device is cleared from the Bluetooth connection dialog (with confirmation).
 
 ## Requirements
 
@@ -134,8 +136,10 @@ The APK is generated at `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## Permissions
 
-On first launch the app asks for Bluetooth and location access. Android
-requires location permission for BLE scanning; the location is not used.
+On first launch the app asks for Bluetooth, location and notification access.
+Android requires location permission for BLE scanning; the location is not
+used. The notification is the (silent) foreground service that keeps the
+connection alive in the background; closing the app removes it.
 
 ## Versioning
 
