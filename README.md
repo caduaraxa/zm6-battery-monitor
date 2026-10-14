@@ -7,6 +7,14 @@ This project is a Flutter port of
 [JeffWDH/bm6-battery-monitor](https://github.com/JeffWDH/bm6-battery-monitor)
 (Python). The BLE protocol was implemented from that project.
 
+## Screenshots
+
+<p align="center">
+  <a href="docs/screenshots/scr1.jpg"><img src="docs/screenshots/scr1.jpg" width="240" alt="Home, light theme"></a>
+  <a href="docs/screenshots/scr2.jpg"><img src="docs/screenshots/scr2.jpg" width="240" alt="Home, dark theme"></a>
+  <a href="docs/screenshots/raw.jpg"><img src="docs/screenshots/raw.jpg" width="240" alt="Raw data screen"></a>
+</p>
+
 ## Features
 
 - Analog voltage gauge with colored status bands; the digital readout takes the
