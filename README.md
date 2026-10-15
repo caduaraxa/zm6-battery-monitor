@@ -17,23 +17,19 @@ This project is a Flutter port of
 
 ## Features
 
-- Analog voltage gauge with colored status bands; the digital readout takes the
-  color of the current band (with a contrasting text color)
-- State of charge (SoC) dial, colored by level (blue / orange / red), and
-  charging status (normal / low voltage / charging)
+- Analog/Digital voltage gauge with colored status bands
+- State of charge (SoC) dial
 - Temperature with a 1-minute sparkline
 - Rapid acceleration / deceleration counters
 - Last engine start voltage
-- Real-time voltage chart with status bands, Volts axis and a tooltip showing
-  the voltage and the time of each sample
+- Real-time voltage chart with status bands
 - Per-device history stored on the phone (never deleted automatically; the
   refresh button clears it after confirmation)
 - Raw data screen: TX / RX packets, decrypted payload and parsed values
 - Bluetooth connection info and device rename (stored per MAC address)
-- About dialog, app version and app icon
 - Light / dark mode
 - Built-in data simulation (play button, bottom left) to preview the UI without
-  a sensor; the background changes while it is running
+  a sensor
 - Auto-connects to the first device advertising as `BM6` and reconnects
   automatically (every 15 s) when the connection is lost, also in the
   background through a silent foreground-service notification
@@ -99,12 +95,6 @@ colors, SoC dial colors) assumes a **liquid (flooded) lead-acid** 12 V battery,
 the usual starter battery. Other chemistries (AGM, gel, lithium) have different
 resting voltages, so the bands and colors will not be accurate for them.
 
-| SoC | Dial color |
-|---|---|
-| 70% and above | Blue (ok) |
-| 50% - 69% | Orange (medium) |
-| Below 50% | Red (weak) |
-
 Lead-acid batteries should not stay below about 50% charge for long, because of
 sulphation; keeping them above 70% is recommended for a long service life.
 
@@ -148,9 +138,11 @@ connection alive in the background; closing the app removes it.
 
 ## Credits
 
+Original Python scripts and studies reverse BLE protocols
 - [JeffWDH/bm6-battery-monitor](https://github.com/JeffWDH/bm6-battery-monitor) - original Python implementation
 - [KrystianD/bm2-battery-monitor](https://github.com/KrystianD/bm2-battery-monitor/blob/master/.docs/reverse_engineering.md)
 - [doubleagent.net - BM2 BLE protocol](https://doubleagent.net/bm2-reversing-the-ble-protocol-of-the-bm2-battery-monitor/)
+- https://www.tarball.ca/posts/reverse-engineering-the-bm6-ble-battery-monitor/
 
 ## License
 
