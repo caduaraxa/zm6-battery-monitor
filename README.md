@@ -17,24 +17,22 @@ This project is a Flutter port of
 
 ## Features
 
-- Analog voltage gauge with colored status bands; the digital readout takes the
-  color of the current band (with a contrasting text color)
-- State of charge (SoC) dial, colored by level (blue / orange / red), and
-  charging status (normal / low voltage / charging)
+- Analog/Digital voltage gauge with colored status bands
+- State of charge (SoC) dial
 - Temperature with a 1-minute sparkline
 - Rapid acceleration / deceleration counters
 - Last engine start voltage
-- Real-time voltage chart with status bands, Volts axis and a tooltip showing
-  the voltage and the time of each sample
-- Per-device history stored on the phone (never deleted automatically; the
-  refresh button clears it after confirmation)
+- Real-time voltage chart with status bands
+- Per-device history stored on the phone (never deleted automatically; it
+  can be cleared from the Bluetooth connection dialog, after confirmation)
 - Raw data screen: TX / RX packets, decrypted payload and parsed values
 - Bluetooth connection info and device rename (stored per MAC address)
-- About dialog, app version and app icon
 - Light / dark mode
 - Built-in data simulation (play button, bottom left) to preview the UI without
-  a sensor; the background changes while it is running
-- Auto-connects to the first device advertising as `BM6`
+  a sensor
+- Auto-connects to the first device advertising as `BM6` and reconnects
+  automatically (every 15 s) when the connection is lost, also in the
+  background through a silent foreground-service notification
 
 ## Protocol
 
@@ -97,12 +95,6 @@ colors, SoC dial colors) assumes a **liquid (flooded) lead-acid** 12 V battery,
 the usual starter battery. Other chemistries (AGM, gel, lithium) have different
 resting voltages, so the bands and colors will not be accurate for them.
 
-| SoC | Dial color |
-|---|---|
-| 70% and above | Blue (ok) |
-| 50% - 69% | Orange (medium) |
-| Below 50% | Red (weak) |
-
 Lead-acid batteries should not stay below about 50% charge for long, because of
 sulphation; keeping them above 70% is recommended for a long service life.
 
@@ -110,8 +102,8 @@ sulphation; keeping them above 70% is recommended for a long service life.
 
 Every reading is saved on the phone, per device (BLE address), and is never
 deleted automatically. The chart is preloaded with the latest samples when the
-app connects. The refresh button asks for confirmation and clears the stored
-history of the current device.
+app connects. The refresh button only reconnects; the history of the current
+device is cleared from the Bluetooth connection dialog (with confirmation).
 
 ## Requirements
 
@@ -134,8 +126,10 @@ The APK is generated at `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## Permissions
 
-On first launch the app asks for Bluetooth and location access. Android
-requires location permission for BLE scanning; the location is not used.
+On first launch the app asks for Bluetooth, location and notification access.
+Android requires location permission for BLE scanning; the location is not
+used. The notification is the (silent) foreground service that keeps the
+connection alive in the background; closing the app removes it.
 
 ## Versioning
 
@@ -144,9 +138,11 @@ requires location permission for BLE scanning; the location is not used.
 
 ## Credits
 
+Original Python scripts and studies in reverse engineering BLE protocols:
 - [JeffWDH/bm6-battery-monitor](https://github.com/JeffWDH/bm6-battery-monitor) - original Python implementation
 - [KrystianD/bm2-battery-monitor](https://github.com/KrystianD/bm2-battery-monitor/blob/master/.docs/reverse_engineering.md)
 - [doubleagent.net - BM2 BLE protocol](https://doubleagent.net/bm2-reversing-the-ble-protocol-of-the-bm2-battery-monitor/)
+- [Reverse Engineering](https://www.tarball.ca/posts/reverse-engineering-the-bm6-ble-battery-monitor/)
 
 ## License
 
