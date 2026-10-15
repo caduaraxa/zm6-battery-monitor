@@ -824,7 +824,25 @@ class _HomePageState extends State<HomePage> {
             titlesData: FlTitlesData(
               topTitles: const AxisTitles(),
               rightTitles: const AxisTitles(),
-              bottomTitles: const AxisTitles(),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 24,
+                  interval:
+                      math.max(1, (pts.last.x - pts.first.x) / 3).roundToDouble(),
+                  getTitlesWidget: (value, meta) {
+                    final d = DateTime.fromMillisecondsSinceEpoch(
+                        (value * 1000).round());
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        '${_two(d.hour)}:${_two(d.minute)}:${_two(d.second)}',
+                        style: const TextStyle(fontSize: 10),
+                      ),
+                    );
+                  },
+                ),
+              ),
               leftTitles: AxisTitles(
                 axisNameWidget:
                     const Text('Volts', style: TextStyle(fontSize: 12)),
