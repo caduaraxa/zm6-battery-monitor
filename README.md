@@ -23,8 +23,8 @@ This project is a Flutter port of
 - Rapid acceleration / deceleration counters
 - Last engine start voltage
 - Real-time voltage chart with status bands
-- Per-device history stored on the phone (never deleted automatically; the
-  refresh button clears it after confirmation)
+- Per-device history stored on the phone (never deleted automatically; it
+  can be cleared from the Bluetooth connection dialog, after confirmation)
 - Raw data screen: TX / RX packets, decrypted payload and parsed values
 - Bluetooth connection info and device rename (stored per MAC address)
 - Light / dark mode
@@ -142,7 +142,7 @@ Original Python scripts and studies reverse BLE protocols
 - [JeffWDH/bm6-battery-monitor](https://github.com/JeffWDH/bm6-battery-monitor) - original Python implementation
 - [KrystianD/bm2-battery-monitor](https://github.com/KrystianD/bm2-battery-monitor/blob/master/.docs/reverse_engineering.md)
 - [doubleagent.net - BM2 BLE protocol](https://doubleagent.net/bm2-reversing-the-ble-protocol-of-the-bm2-battery-monitor/)
-- https://www.tarball.ca/posts/reverse-engineering-the-bm6-ble-battery-monitor/
+- [Reverse Engineering](https://www.tarball.ca/posts/reverse-engineering-the-bm6-ble-battery-monitor/)
 
 ## License
 
