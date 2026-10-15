@@ -138,7 +138,7 @@ connection alive in the background; closing the app removes it.
 
 ## Credits
 
-Original Python scripts and studies reverse BLE protocols
+Original Python scripts and studies in reverse engineering BLE protocols:
 - [JeffWDH/bm6-battery-monitor](https://github.com/JeffWDH/bm6-battery-monitor) - original Python implementation
 - [KrystianD/bm2-battery-monitor](https://github.com/KrystianD/bm2-battery-monitor/blob/master/.docs/reverse_engineering.md)
 - [doubleagent.net - BM2 BLE protocol](https://doubleagent.net/bm2-reversing-the-ble-protocol-of-the-bm2-battery-monitor/)
