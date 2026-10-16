@@ -2,10 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
@@ -15,7 +15,7 @@ import 'package:pointycastle/block/aes.dart' show AESEngine;
 import 'package:shared_preferences/shared_preferences.dart';
 
 const appName = 'ZM6 Battery Monitor';
-const appVersion = '0.4.0'; // keep in sync with pubspec.yaml
+const appVersion = '0.4.1'; // keep in sync with pubspec.yaml
 const repoUrl = 'https://github.com/caduaraxa/zm6-battery-monitor';
 
 /// Voltage ranges used by the gauge and the chart bands.
@@ -975,30 +975,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _showAbout(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text(appName),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Version $appVersion'),
-            const SizedBox(height: 8),
-            const SelectableText(repoUrl,
-                style: TextStyle(color: Colors.blue)),
-            const SizedBox(height: 16),
-            const Text('By Cadu Rolim',
-                style: TextStyle(fontSize: 11, color: Colors.grey)),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'))
-        ],
-      ),
-    );
+    showDialog(context: context, builder: (_) => const _AboutDialog());
   }
 }
 
@@ -1287,6 +1264,221 @@ class DebugPage extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+enum _UpdateState { checking, upToDate, available, downloading, error }
+
+/// About dialog that checks GitHub for a newer release and installs it.
+class _AboutDialog extends StatefulWidget {
+  const _AboutDialog();
+
+  @override
+  State<_AboutDialog> createState() => _AboutDialogState();
+}
+
+class _AboutDialogState extends State<_AboutDialog> {
+  static const _channel = MethodChannel('zm6/updater');
+  static const _apiUrl =
+      'https://api.github.com/repos/caduaraxa/zm6-battery-monitor/releases/latest';
+
+  _UpdateState _state = _UpdateState.checking;
+  String? _latest, _apkUrl, _message;
+  double? _progress;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  /// True if [a] is a newer version than [b] (both "x.y.z").
+  static bool _newer(String a, String b) {
+    List<int> parse(String v) => v
+        .replaceFirst(RegExp(r'^v'), '')
+        .split('+')
+        .first
+        .split('.')
+        .map((e) => int.tryParse(e) ?? 0)
+        .toList();
+    final x = parse(a), y = parse(b);
+    for (var i = 0; i < math.max(x.length, y.length); i++) {
+      final xi = i < x.length ? x[i] : 0, yi = i < y.length ? y[i] : 0;
+      if (xi != yi) return xi > yi;
+    }
+    return false;
+  }
+
+  Future<void> _check() async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final is64 = await _channel.invokeMethod<bool>('is64bit') ?? true;
+      final req = await client.getUrl(Uri.parse(_apiUrl));
+      req.headers.set('Accept', 'application/vnd.github+json');
+      req.headers.set('User-Agent', 'zm6-monitor');
+      final res = await req.close().timeout(const Duration(seconds: 15));
+      final body = await res.transform(utf8.decoder).join();
+      if (res.statusCode != 200) throw 'GitHub returned ${res.statusCode}';
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final tag = json['tag_name'] as String;
+      String? url;
+      for (final asset in (json['assets'] as List? ?? [])) {
+        final name = asset['name'] as String;
+        if (!name.endsWith('.apk')) continue;
+        if (name.contains('32bits') != is64) {
+          url = asset['browser_download_url'] as String;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _latest = tag.replaceFirst(RegExp(r'^v'), '');
+        if (_newer(tag, appVersion) && url != null) {
+          _apkUrl = url;
+          _state = _UpdateState.available;
+        } else {
+          _state = _UpdateState.upToDate;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _state = _UpdateState.error;
+        _message = 'Could not check for updates.';
+      });
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<void> _downloadAndInstall() async {
+    setState(() {
+      _state = _UpdateState.downloading;
+      _progress = null;
+      _message = null;
+    });
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/zm6-update.apk');
+      final req = await client.getUrl(Uri.parse(_apkUrl!));
+      req.headers.set('User-Agent', 'zm6-monitor');
+      final res = await req.close();
+      if (res.statusCode != 200) throw 'HTTP ${res.statusCode}';
+      final total = res.contentLength;
+      var got = 0;
+      final sink = file.openWrite();
+      await for (final chunk in res) {
+        sink.add(chunk);
+        got += chunk.length;
+        if (mounted && total > 0) setState(() => _progress = got / total);
+      }
+      await sink.close();
+      final r = await _channel
+          .invokeMethod<String>('installApk', {'path': file.path});
+      if (!mounted) return;
+      setState(() {
+        _state = _UpdateState.available;
+        if (r == 'permission') {
+          _message = 'Allow installing from this app, then tap again.';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _state = _UpdateState.error;
+        _message = 'Download failed.';
+      });
+    } finally {
+      client.close();
+    }
+  }
+
+  Widget _updateSection() {
+    switch (_state) {
+      case _UpdateState.checking:
+        return const Row(children: [
+          SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 12),
+          Text('Checking for updates...'),
+        ]);
+      case _UpdateState.upToDate:
+        return const Text('You have the latest version.');
+      case _UpdateState.available:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('New version available: $_latest'),
+            if (_message != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(_message!,
+                    style: const TextStyle(fontSize: 12, color: Colors.orange)),
+              ),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _downloadAndInstall,
+              icon: const Icon(Icons.system_update),
+              label: const Text('Download and install update'),
+            ),
+          ],
+        );
+      case _UpdateState.downloading:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(_progress == null
+                ? 'Downloading update...'
+                : 'Downloading update... ${(_progress! * 100).round()}%'),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: _progress),
+          ],
+        );
+      case _UpdateState.error:
+        return Row(children: [
+          Expanded(
+              child: Text(_message ?? 'Error',
+                  style: const TextStyle(color: Colors.redAccent))),
+          TextButton(
+              onPressed: () {
+                setState(() => _state = _UpdateState.checking);
+                _check();
+              },
+              child: const Text('Retry')),
+        ]);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text(appName),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Version $appVersion'),
+          const SizedBox(height: 8),
+          const SelectableText(repoUrl, style: TextStyle(color: Colors.blue)),
+          const SizedBox(height: 16),
+          _updateSection(),
+          const SizedBox(height: 16),
+          const Text('By Cadu Rolim',
+              style: TextStyle(fontSize: 11, color: Colors.grey)),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: _state == _UpdateState.downloading
+                ? null
+                : () => Navigator.pop(context),
+            child: const Text('Close'))
+      ],
     );
   }
 }

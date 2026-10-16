@@ -123,6 +123,21 @@ both ARM architectures:
 - `zm6-vX.Y.Z.apk` — ARM 64-bit (arm64-v8a), most modern phones
 - `zm6-vX.Y.Z-32bits.apk` — ARM 32-bit (armeabi-v7a), older phones
 
+## Auto-update
+
+Open the **About** dialog (info button). The app checks the latest
+[GitHub release](https://github.com/caduaraxa/zm6-battery-monitor/releases/latest)
+and compares it with the installed version. If a newer one exists, a
+**Download and install update** button appears: it shows the download progress
+and then opens the Android installer.
+
+- The right APK is picked automatically: 64-bit (`zm6-vX.Y.Z.apk`) or 32-bit
+  (`zm6-vX.Y.Z-32bits.apk`), based on the ABIs the device supports.
+- On first use Android asks to allow installing apps from ZM6 (_Install unknown
+  apps_); allow it and tap the button again.
+- Updates install over the current app (same signing key) and keep your history.
+- Needs internet access only for the check and the download.
+
 ## Build
 
 ```
@@ -145,7 +160,7 @@ connection alive in the background; closing the app removes it.
 - Manage devices (colours, per-device settings)
 - Minimum/maximum voltage alarm
 - Cranking voltage test (using historical data)
-- Settings menu (automatic reconnect, panels, graphs, auto-update)
+- Settings menu (automatic reconnect, panels, graphs)
 
 ## Versioning
 
