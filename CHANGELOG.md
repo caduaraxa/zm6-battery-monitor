@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-16
+
+### Added
+- Landscape layout: gauges on the left half, voltage chart and buttons on the
+  right half, with device, clock and status centered in the top bar.
+
 ## [0.3.0] - 2026-10-14
 
 ### Added

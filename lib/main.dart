@@ -15,7 +15,7 @@ import 'package:pointycastle/block/aes.dart' show AESEngine;
 import 'package:shared_preferences/shared_preferences.dart';
 
 const appName = 'ZM6 Battery Monitor';
-const appVersion = '0.3.0'; // keep in sync with pubspec.yaml
+const appVersion = '0.4.0'; // keep in sync with pubspec.yaml
 const repoUrl = 'https://github.com/caduaraxa/zm6-battery-monitor';
 
 /// Voltage ranges used by the gauge and the chart bands.
@@ -589,6 +589,8 @@ class _HomePageState extends State<HomePage> {
     final date = '${_now.year}-${_two(_now.month)}-${_two(_now.day)}';
     final time = '${_two(_now.hour)}:${_two(_now.minute)}:${_two(_now.second)}';
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final landscape =
+        MediaQuery.orientationOf(context) == Orientation.landscape;
     return Scaffold(
       // distinct background while the simulation is running
       backgroundColor: bm.simulating.value
@@ -602,7 +604,10 @@ class _HomePageState extends State<HomePage> {
           padding: const EdgeInsets.all(10),
           child: Image.asset('assets/icon/icon.png'),
         ),
-        title: ValueListenableBuilder<String?>(
+        centerTitle: landscape,
+        title: landscape
+            ? _landscapeTitle(date, time)
+            : ValueListenableBuilder<String?>(
           valueListenable: bm.deviceName,
           builder: (_, name, _) => ValueListenableBuilder<String?>(
             valueListenable: bm.customName,
@@ -638,25 +643,72 @@ class _HomePageState extends State<HomePage> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: Column(children: [
-            _DeviceLine(bm: bm),
-            const SizedBox(height: 2),
-            Text('$date  $time',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 2),
-            ValueListenableBuilder<String>(
-              valueListenable: bm.status,
-              builder: (_, s, _) =>
-                  Text(s, style: Theme.of(context).textTheme.bodySmall),
-            ),
-            const SizedBox(height: 8),
-            _buildDashboard(),
-            const SizedBox(height: 8),
-            _buildStartLabel(),
-            const SizedBox(height: 4),
-            Expanded(child: _buildChart()),
-            const SizedBox(height: 8),
-            Row(
+          child: landscape ? _buildLandscape() : _buildPortrait(date, time),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPortrait(String date, String time) {
+    return Column(children: [
+      _DeviceLine(bm: bm),
+      const SizedBox(height: 2),
+      Text('$date  $time', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 2),
+      ValueListenableBuilder<String>(
+        valueListenable: bm.status,
+        builder: (_, s, _) =>
+            Text(s, style: Theme.of(context).textTheme.bodySmall),
+      ),
+      const SizedBox(height: 8),
+      _buildDashboard(),
+      const SizedBox(height: 8),
+      _buildStartLabel(),
+      const SizedBox(height: 4),
+      Expanded(child: _buildChart()),
+      const SizedBox(height: 8),
+      _buildBottomRow(),
+    ]);
+  }
+
+  /// Two 50% columns: gauges on the left, chart and buttons on the right.
+  Widget _buildLandscape() {
+    return Row(children: [
+      Expanded(
+        child: Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: SizedBox(width: 420, child: _buildDashboard()),
+          ),
+        ),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: Column(children: [
+          _buildStartLabel(),
+          const SizedBox(height: 4),
+          Expanded(child: _buildChart()),
+          const SizedBox(height: 8),
+          _buildBottomRow(),
+        ]),
+      ),
+    ]);
+  }
+
+  /// Centered app bar content for landscape: device, clock and status.
+  Widget _landscapeTitle(String date, String time) {
+    final small = Theme.of(context).textTheme.bodySmall;
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      _DeviceLine(bm: bm),
+      ValueListenableBuilder<String>(
+        valueListenable: bm.status,
+        builder: (_, s, _) => Text('$date  $time  ·  $s', style: small),
+      ),
+    ]);
+  }
+
+  Widget _buildBottomRow() {
+    return Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 SizedBox(
@@ -707,11 +759,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ],
-            ),
-          ]),
-        ),
-      ),
-    );
+            );
   }
 
   Widget _buildDashboard() {
