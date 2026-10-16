@@ -111,15 +111,24 @@ device is cleared from the Bluetooth connection dialog (with confirmation).
 - [Flutter](https://docs.flutter.dev/get-started/install) 3.x
 - A BM6 battery monitor
 
-> **Tested only on Android 16.** The app has only been built (arm64) and tested
-> on a single Android 16 phone. It may work on other Android versions and
+> **Tested on Android 16 (arm64) and Android 10 (32-bit).** It may work on other Android versions and
 > devices, but that has not been verified.
+
+## Download
+
+Prebuilt APKs are available on the
+[Releases](https://github.com/caduaraxa/zm6-battery-monitor/releases) page for
+both ARM architectures:
+
+- `zm6-vX.Y.Z.apk` — ARM 64-bit (arm64-v8a), most modern phones
+- `zm6-vX.Y.Z-32bits.apk` — ARM 32-bit (armeabi-v7a), older phones
 
 ## Build
 
 ```
 flutter pub get
-flutter build apk --release --target-platform android-arm64
+flutter build apk --release --target-platform android-arm64   # 64-bit
+flutter build apk --release --target-platform android-arm     # 32-bit
 ```
 
 The APK is generated at `build/app/outputs/flutter-apk/app-release.apk`.
@@ -130,6 +139,13 @@ On first launch the app asks for Bluetooth, location and notification access.
 Android requires location permission for BLE scanning; the location is not
 used. The notification is the (silent) foreground service that keeps the
 connection alive in the background; closing the app removes it.
+
+## Future feature suggestions
+
+- Manage devices (colours, per-device settings)
+- Minimum/maximum voltage alarm
+- Cranking voltage test (using historical data)
+- Settings menu (automatic reconnect, panels, graphs, auto-update)
 
 ## Versioning
 
