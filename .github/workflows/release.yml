@@ -1,8 +1,8 @@
 name: Release
 
 # When a pull request is merged into main, read the version from pubspec.yaml,
-# tag it (vX.Y.Z), build the APK and publish it as a GitHub release asset named
-# zm6-vX.Y.Z.apk. If the tag already exists nothing is released.
+# tag it (vX.Y.Z), build the 64-bit and 32-bit APKs and publish them as GitHub release assets
+# named zm6-vX.Y.Z.apk and zm6-vX.Y.Z-32bits.apk. If the tag already exists nothing is released.
 on:
   pull_request:
     types: [closed]
@@ -58,6 +58,8 @@ jobs:
           flutter pub get
           flutter build apk --release --target-platform android-arm64
           cp build/app/outputs/flutter-apk/app-release.apk "zm6-${{ steps.ver.outputs.tag }}.apk"
+          flutter build apk --release --target-platform android-arm
+          cp build/app/outputs/flutter-apk/app-release.apk "zm6-${{ steps.ver.outputs.tag }}-32bits.apk"
 
       - name: Create tag and release
         if: steps.check.outputs.exists == 'false'
@@ -66,6 +68,7 @@ jobs:
         run: |
           gh release create "${{ steps.ver.outputs.tag }}" \
             "zm6-${{ steps.ver.outputs.tag }}.apk" \
+            "zm6-${{ steps.ver.outputs.tag }}-32bits.apk" \
             --target "${{ github.event.pull_request.merge_commit_sha }}" \
             --title "ZM6 ${{ steps.ver.outputs.tag }}" \
             --notes "Release ${{ steps.ver.outputs.tag }}. See CHANGELOG.md for details."
