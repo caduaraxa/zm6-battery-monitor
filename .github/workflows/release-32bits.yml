@@ -1,0 +1,67 @@
+name: Release 32-bit APK
+
+# Manually run: takes the latest published release, compares its tag with main
+# (ignoring .github/), and if the code is the same builds a 32-bit
+# (armeabi-v7a) APK and attaches it to that release as
+# zm6-<tag>-32bits.apk. If main has moved on, nothing is built.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-32bits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Find latest release and compare with main
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release view --json tagName -q .tagName)
+          if [ -z "$TAG" ]; then echo "no release found"; exit 1; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "refs/tags/$TAG" origin/main -- . ':!.github'; then
+            echo "same=true" >> "$GITHUB_OUTPUT"
+            echo "main matches $TAG, building 32-bit APK."
+          else
+            echo "same=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::main has changes after $TAG, skipping 32-bit build."
+          fi
+
+      - name: Checkout release tag
+        if: steps.check.outputs.same == 'true'
+        run: git checkout "refs/tags/${{ steps.check.outputs.tag }}"
+
+      - uses: actions/setup-java@v4
+        if: steps.check.outputs.same == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        if: steps.check.outputs.same == 'true'
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build 32-bit APK
+        if: steps.check.outputs.same == 'true'
+        run: |
+          flutter pub get
+          flutter build apk --release --target-platform android-arm
+          cp build/app/outputs/flutter-apk/app-release.apk "zm6-${{ steps.check.outputs.tag }}-32bits.apk"
+
+      - name: Upload to release
+        if: steps.check.outputs.same == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.check.outputs.tag }}" "zm6-${{ steps.check.outputs.tag }}-32bits.apk" --clobber
