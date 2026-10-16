@@ -1,24 +1,23 @@
 name: Release
 
-# When a pull request is merged into main, read the version from pubspec.yaml,
+# On every push to main (PR merge or direct push) or manual run, read the version from pubspec.yaml,
 # tag it (vX.Y.Z), build the 64-bit and 32-bit APKs and publish them as GitHub release assets
 # named zm6-vX.Y.Z.apk and zm6-vX.Y.Z-32bits.apk. If the tag already exists nothing is released.
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   release:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.sha }}
 
       - name: Read version from pubspec.yaml
         id: ver
@@ -69,6 +68,6 @@ jobs:
           gh release create "${{ steps.ver.outputs.tag }}" \
             "zm6-${{ steps.ver.outputs.tag }}.apk" \
             "zm6-${{ steps.ver.outputs.tag }}-32bits.apk" \
-            --target "${{ github.event.pull_request.merge_commit_sha }}" \
+            --target "${{ github.sha }}" \
             --title "ZM6 ${{ steps.ver.outputs.tag }}" \
             --notes "Release ${{ steps.ver.outputs.tag }}. See CHANGELOG.md for details."
