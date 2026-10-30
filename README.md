@@ -21,7 +21,9 @@ This project is a Flutter port of
 - State of charge (SoC) dial
 - Temperature with a 1-minute sparkline
 - Rapid acceleration / deceleration counters
-- Last engine start voltage
+- Last engine start voltage, with a `[history]` link to the list of starts
+- Start history: every engine start read from the sensor's own log (time,
+  cranking voltage, min/max voltage, engine-on time, SoC, rapid accel/decel)
 - Real-time voltage chart with status bands
 - Per-device history stored on the phone (never deleted automatically; it
   can be cleared from the Bluetooth connection dialog, after confirmation)
@@ -78,6 +80,20 @@ ignores them. Readings arrive about once per second.
 Further frames of the same response carry the voltage curve of the start and
 are currently ignored.
 
+### On-device history (`d1 55 05 ...`)
+
+The sensor logs one 4-byte record every 2 minutes (about 31 days, newest
+first). The request is `d1 55 05 00 00 00 nn nn nn` (`nn` = number of records,
+24-bit big endian, at most 22320). The reply starts with `d1 55 05` plus the
+record count (bytes 3-4), followed by raw blocks until the marker `FFFEFE`
+(`FEFEFE` blocks are empty). `d1 55 06` stops the transfer.
+
+Record (8 hex digits): 3 = voltage / 100, 2 = SoC, 2 = temperature, 1 = flags.
+Flags: bit 3 = negative temperature, bits 2..0 = event (`010` engine start,
+`100` engine stop). A stop record is followed by one extra record holding the
+rapid acceleration and deceleration counters (it takes no time slot). Record
+`i` was taken at `now - 2 min * i`. Protocol taken from the original app.
+
 ### Voltage bands
 
 | Voltage | Meaning |
@@ -104,6 +120,13 @@ Every reading is saved on the phone, per device (BLE address), and is never
 deleted automatically. The chart is preloaded with the latest samples when the
 app connects. The refresh button only reconnects; the history of the current
 device is cleared from the Bluetooth connection dialog (with confirmation).
+
+Engine starts are read from the sensor's own log after connecting (only what is
+newer than the last sync) and cached per device, so they are kept even when the
+app was closed during a start. Open them with the `[history]` link under
+"Last start voltage". Cranking voltage and time exist only for starts the app
+saw soon after they happened, since the sensor keeps that test for the last
+start only.
 
 ## Requirements
 
@@ -159,7 +182,6 @@ connection alive in the background; closing the app removes it.
 
 - Manage devices (colours, per-device settings)
 - Minimum/maximum voltage alarm
-- Cranking voltage test (using historical data)
 - Settings menu (automatic reconnect, panels, graphs)
 
 ## Versioning

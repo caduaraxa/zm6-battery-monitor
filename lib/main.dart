@@ -14,8 +14,10 @@ import 'package:pointycastle/api.dart' show KeyParameter;
 import 'package:pointycastle/block/aes.dart' show AESEngine;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'trips.dart';
+
 const appName = 'ZM6 Battery Monitor';
-const appVersion = '0.4.1'; // keep in sync with pubspec.yaml
+const appVersion = '0.4.2'; // keep in sync with pubspec.yaml
 const repoUrl = 'https://github.com/caduaraxa/zm6-battery-monitor';
 
 /// Voltage ranges used by the gauge and the chart bands.
@@ -121,6 +123,11 @@ class Bm6 {
   final points = ValueNotifier<List<FlSpot>>([]);
   final tempPoints = ValueNotifier<List<FlSpot>>([]);
   final log = ValueNotifier<List<String>>([]);
+  final trips = ValueNotifier<List<Trip>>([]);
+  final cranks = ValueNotifier<List<CrankTest>>([]);
+
+  /// 0..1 while the on-device history is downloading, null otherwise.
+  final syncProgress = ValueNotifier<double?>(null);
 
   BluetoothDevice? _dev;
   StreamSubscription? _scanSub, _notifySub, _connSub;
@@ -149,6 +156,7 @@ class Bm6 {
   // --- history: every sample is appended to a CSV file per device ---
   IOSink? _sink;
   int _pending = 0;
+  static const _maxGapS = 300; // gap (s) that breaks the chart line
 
   Future<File> _fileFor(String address) async {
     final dir = await getApplicationDocumentsDirectory();
@@ -181,9 +189,13 @@ class Bm6 {
           final temp = int.tryParse(p[2]);
           if (ms == null || volt == null || temp == null) continue;
           final x = ms / 1000;
+          if (v.isNotEmpty && x - v.last.x > _maxGapS) v.clear();
           v.add(FlSpot(x, volt));
           if (nowS - x <= 60) t.add(FlSpot(x, temp.toDouble()));
         }
+        // Drop history older than the gap limit relative to now, so the
+        // first live sample doesn't connect to yesterday's data.
+        if (v.isNotEmpty && nowS - v.last.x > _maxGapS) v.clear();
         points.value = v.takeLast(120);
         tempPoints.value = t;
       }
@@ -213,7 +225,203 @@ class Bm6 {
     } catch (_) {}
     points.value = [];
     tempPoints.value = [];
+    trips.value = [];
+    cranks.value = [];
+    try {
+      if (m != null) {
+        for (final f in [await _tripsFile(m), await _cranksFile(m)]) {
+          if (await f.exists()) await f.delete();
+        }
+        final p = await SharedPreferences.getInstance();
+        await p.remove('hsync_$m');
+      }
+    } catch (_) {}
     _log('history cleared');
+  }
+
+  // --- start (trip) history: read from the sensor, cached per device ---
+  Future<File> _tripsFile(String address) async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/trips_${address.replaceAll(':', '')}.json');
+  }
+
+  Future<File> _cranksFile(String address) async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/cranks_${address.replaceAll(':', '')}.json');
+  }
+
+  Future<void> _loadTrips(String address) async {
+    try {
+      final f = await _tripsFile(address);
+      if (await f.exists()) {
+        trips.value = [
+          for (final j in jsonDecode(await f.readAsString()) as List)
+            Trip.fromJson(j as Map<String, dynamic>)
+        ];
+      }
+      final c = await _cranksFile(address);
+      if (await c.exists()) {
+        cranks.value = [
+          for (final j in jsonDecode(await c.readAsString()) as List)
+            CrankTest.fromJson(j as Map<String, dynamic>)
+        ];
+      }
+    } catch (e) {
+      _log('trips load error: $e');
+    }
+  }
+
+  Future<void> _saveTrips() async {
+    final m = mac.value;
+    if (m == null || simulating.value) return;
+    try {
+      await (await _tripsFile(m)).writeAsString(
+          jsonEncode([for (final t in trips.value) t.toJson()]));
+      await (await _cranksFile(m)).writeAsString(
+          jsonEncode([for (final c in cranks.value) c.toJson()]));
+    } catch (e) {
+      _log('trips save error: $e');
+    }
+  }
+
+  void _addCrank(CrankTest c) {
+    final l = [...cranks.value];
+    final i = l.indexWhere(
+        (x) => x.time.difference(c.time).abs() <= const Duration(minutes: 4));
+    if (i >= 0) {
+      l[i] = c;
+    } else {
+      l.add(c);
+    }
+    l.sort((a, b) => a.time.compareTo(b.time));
+    cranks.value = l.length > 500 ? l.sublist(l.length - 500) : l;
+    _saveTrips();
+  }
+
+  // On-device history download (command 0x05).
+  static const _maxSlots = 22320; // 31 days, the size the original app asks
+  StringBuffer? _hist;
+  int _histCount = -1;
+  DateTime? _histBase;
+  Timer? _histTimeout;
+  String _histTail = ''; // last chars, to find a marker split across blocks
+  DateTime? _lastSyncTry;
+
+  /// Asks the sensor for its stored history (only what is newer than the
+  /// last sync) and merges the decoded starts into [trips].
+  Future<void> syncHistory() async {
+    if (_write == null || simulating.value || _hist != null) return;
+    final m = mac.value;
+    if (m == null) return;
+    // protect the sensor from repeated requests (e.g. reconnect loops)
+    final lt = _lastSyncTry;
+    if (lt != null && DateTime.now().difference(lt) < const Duration(seconds: 30)) {
+      return;
+    }
+    _lastSyncTry = DateTime.now();
+    var base = DateTime.now();
+    base = DateTime(base.year, base.month, base.day, base.hour, base.minute);
+    if (base.minute % 2 == 0) base = base.subtract(const Duration(minutes: 1));
+    var n = _maxSlots;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final last = p.getInt('hsync_$m');
+      // a trip still open must be re-read from its start
+      DateTime? from =
+          last == null ? null : DateTime.fromMillisecondsSinceEpoch(last);
+      for (final t in trips.value) {
+        if (t.stop == null && from != null && t.start.isBefore(from)) {
+          from = t.start;
+        }
+      }
+      if (from != null) {
+        n = base.difference(from).inMinutes ~/ 2 + 10;
+      }
+    } catch (_) {}
+    // same bounds the original app uses: never 0/negative, never above 31 days
+    n = n.clamp(10, _maxSlots);
+    _hist = StringBuffer();
+    _histTail = '';
+    _histCount = -1;
+    _histBase = base;
+    syncProgress.value = 0;
+    _histTimeout?.cancel();
+    _histTimeout = Timer(const Duration(seconds: 90), () {
+      _log('history sync timed out, asking the sensor to stop');
+      _endSync();
+      _send(0x06); // stop reading history
+    });
+    final c = Uint8List(16)
+      ..[0] = 0xd1
+      ..[1] = 0x55
+      ..[2] = 0x05
+      ..[6] = (n >> 16) & 0xff
+      ..[7] = (n >> 8) & 0xff
+      ..[8] = n & 0xff;
+    _log('history sync: $n slots');
+    try {
+      await _write?.write(_aes(c, true), withoutResponse: false);
+      _log('TX ${_hex(c)}');
+    } catch (e) {
+      _log('TX error: $e');
+      _endSync();
+    }
+  }
+
+  void _endSync() {
+    _histTimeout?.cancel();
+    _hist = null;
+    _histCount = -1;
+    syncProgress.value = null;
+  }
+
+  Future<void> _finishSync(String hex) async {
+    final base = _histBase!;
+    _endSync();
+    try {
+      final samples = parseHistory(hex, base);
+      final p = buildTrips(samples);
+      trips.value = mergeTrips(trips.value, p);
+      _log('history: ${samples.length} samples, ${p.trips.length} starts');
+      final sp = await SharedPreferences.getInstance();
+      await sp.setInt('hsync_${mac.value}', base.millisecondsSinceEpoch);
+      await _saveTrips();
+    } catch (e) {
+      _log('history parse error: $e');
+    }
+  }
+
+  /// Handles a decrypted block while a history download is running.
+  /// Returns true when the block was consumed.
+  bool _histBlock(Uint8List dec) {
+    final h = _hist;
+    if (h == null) return false;
+    final real = dec[0] == 0xd1 && dec[1] == 0x55 && dec[2] == 0x07;
+    if (real) return false; // live data keeps flowing
+    if (_histCount < 0) {
+      if (dec[0] == 0xd1 && dec[1] == 0x55 && dec[2] == 0x05) {
+        _histCount = (dec[3] << 8) | dec[4];
+        _log('history: $_histCount records announced');
+        if (_histCount <= 0) _endSync();
+        return true;
+      }
+      return false;
+    }
+    final hex = _hex(dec).toUpperCase();
+    if (hex.contains('FEFEFE')) return true; // empty marker
+    final at = (_histTail + hex).indexOf('FFFEFE');
+    if (at >= 0) {
+      final end = h.length - _histTail.length + at;
+      h.write(hex);
+      _finishSync(h.toString().substring(0, end));
+    } else {
+      h.write(hex);
+      final all = _histTail + hex;
+      _histTail = all.substring(all.length - 5);
+      syncProgress.value =
+          math.min(h.length / (_histCount * 8), 0.99).toDouble();
+    }
+    return true;
   }
 
   // --- custom device name (stored per MAC) ---
@@ -292,6 +500,7 @@ class Bm6 {
       mac.value = d.remoteId.str;
       _loadName(d.remoteId.str);
       await _openHistory(d.remoteId.str);
+      await _loadTrips(d.remoteId.str);
       await d.connect(
           license: License.free, timeout: const Duration(seconds: 30));
       _connSub = d.connectionState.listen((s) {
@@ -328,6 +537,8 @@ class Bm6 {
       status.value = 'Connected';
       _notify('Connected to ${d.platformName.isNotEmpty ? d.platformName : 'BM6'}');
       _log('connected, notifications enabled');
+      await Future.delayed(const Duration(seconds: 2));
+      await syncHistory();
     } catch (e) {
       status.value = 'Error: $e';
       _log('error: $e');
@@ -347,12 +558,20 @@ class Bm6 {
   }
 
   void _onData(List<int> raw) {
-    if (raw.length != 16) {
+    // a notification may carry several 16-byte blocks
+    if (raw.isEmpty || raw.length % 16 != 0) {
       _log('RX (len ${raw.length}) ${_hex(raw)}');
       return;
     }
-    final dec = _aes(Uint8List.fromList(raw), false);
-    _log('RX ${_hex(raw)}\n    DEC ${_hex(dec)}');
+    for (var o = 0; o < raw.length; o += 16) {
+      _onBlock(Uint8List.fromList(raw.sublist(o, o + 16)));
+    }
+  }
+
+  void _onBlock(Uint8List block) {
+    final dec = _aes(block, false);
+    if (_histBlock(dec)) return;
+    _log('RX ${_hex(block)}\n    DEC ${_hex(dec)}');
     if (dec[0] != 0xd1 || dec[1] != 0x55) return;
 
     if (dec[2] == 0x03) {
@@ -362,10 +581,12 @@ class Bm6 {
         return;
       }
       final v = ((dec[4] << 8) | dec[5]) / 100;
+      final ms = (dec[6] << 8) | dec[7];
       final ago = (dec[8] << 8) | dec[9]; // units of 2 minutes
       final when = DateTime.now().subtract(Duration(minutes: ago * 2));
       _log('    start voltage=$v V');
       lastStart.value = StartInfo(v, when);
+      _addCrank(CrankTest(when, v, ms));
       return;
     }
 
@@ -399,7 +620,12 @@ class Bm6 {
     chargeStatus.value = st;
     rapidAcc.value = acc;
     rapidDec.value = dcc;
-    points.value = [...points.value, FlSpot(now, v)].takeLast(120);
+    final prev = points.value;
+    // A long silence (e.g. sensor reconnected next day) must not be drawn as
+    // a line across the gap: start the chart fresh.
+    final base =
+        prev.isNotEmpty && now - prev.last.x > _maxGapS ? <FlSpot>[] : prev;
+    points.value = [...base, FlSpot(now, v)].takeLast(120);
     if (!simulating.value && _sink != null) {
       _sink!.writeln('$nowMs,$v,$t,$soc,$st,$acc,$dcc');
       if (++_pending >= 10) {
@@ -425,9 +651,36 @@ class Bm6 {
       deviceName.value = null;
       mac.value = null;
       customName.value = null;
+      trips.value = [];
+      cranks.value = [];
       return;
     }
     simulating.value = true;
+    final now = DateTime.now();
+    final r = math.Random(7);
+    trips.value = [
+      for (var k = 9; k >= 0; k--)
+        () {
+          final s = now.subtract(Duration(hours: 5 + k * 9, minutes: k * 7));
+          final len = 8 + r.nextInt(70);
+          return Trip(
+            start: s,
+            stop: s.add(Duration(minutes: len)),
+            vStart: 12.2 + r.nextDouble() * 0.5,
+            vMin: 11.8 + r.nextDouble() * 0.4,
+            vMax: 14.0 + r.nextDouble() * 0.4,
+            tStart: 15 + r.nextInt(15),
+            socStart: 55 + r.nextInt(30),
+            socEnd: 70 + r.nextInt(25),
+            acc: r.nextInt(6),
+            dec: r.nextInt(6),
+          );
+        }()
+    ];
+    cranks.value = [
+      for (final t in trips.value)
+        CrankTest(t.start, 9 + r.nextDouble() * 2, 300 + r.nextInt(500)),
+    ];
     status.value = 'Simulation';
     deviceName.value = 'BM6 (sim)';
     mac.value = '50:54:7B:00:00:00';
@@ -533,6 +786,7 @@ class Bm6 {
   }
 
   Future<void> _cleanup() async {
+    _endSync();
     await _closeHistory();
     await _notifySub?.cancel();
     await _connSub?.cancel();
@@ -815,7 +1069,20 @@ class _HomePageState extends State<HomePage> {
             text += '  (${_two(w.day)}/${_two(w.month)} ${_two(w.hour)}:${_two(w.minute)})';
           }
         }
-        return Text(text, style: const TextStyle(fontWeight: FontWeight.w600));
+        return Column(mainAxisSize: MainAxisSize.min, children: [
+          Text(text, style: const TextStyle(fontWeight: FontWeight.w600)),
+          InkWell(
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const StartsPage())),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+              child: Text('[history]',
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      decoration: TextDecoration.underline)),
+            ),
+          ),
+        ]);
       },
     );
   }
@@ -1479,6 +1746,111 @@ class _AboutDialogState extends State<_AboutDialog> {
                 : () => Navigator.pop(context),
             child: const Text('Close'))
       ],
+    );
+  }
+}
+
+/// Engine starts read from the sensor's on-device log.
+class StartsPage extends StatelessWidget {
+  const StartsPage({super.key});
+
+  static String _two(int n) => n.toString().padLeft(2, '0');
+
+  static String _fmt(DateTime d) =>
+      '${_two(d.day)}/${_two(d.month)}/${d.year} ${_two(d.hour)}:${_two(d.minute)}';
+
+  static String _dur(Duration d) {
+    if (d.inHours > 0) return '${d.inHours} h ${d.inMinutes % 60} min';
+    return '${d.inMinutes} min';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bm = Bm6.i;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Start history'),
+        actions: [
+          ValueListenableBuilder<double?>(
+            valueListenable: bm.syncProgress,
+            builder: (_, p, _) => p != null
+                ? Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                            value: p > 0 ? p : null, strokeWidth: 3)))
+                : IconButton(
+                    tooltip: 'Read from sensor',
+                    icon: const Icon(Icons.sync),
+                    onPressed: bm.syncHistory,
+                  ),
+          ),
+        ],
+      ),
+      body: ValueListenableBuilder<List<Trip>>(
+        valueListenable: bm.trips,
+        builder: (_, trips, _) => ValueListenableBuilder<List<CrankTest>>(
+          valueListenable: bm.cranks,
+          builder: (_, cranks, _) {
+            if (trips.isEmpty) {
+              return const Center(
+                  child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                    'No starts yet. Connect to the sensor and tap the sync '
+                    'button to read its stored history.',
+                    textAlign: TextAlign.center),
+              ));
+            }
+            final list = trips.reversed.toList();
+            return ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: list.length,
+              itemBuilder: (_, i) => _card(context, list[i], cranks),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _card(BuildContext context, Trip t, List<CrankTest> cranks) {
+    final c = crankFor(t, cranks);
+    final style = Theme.of(context).textTheme.bodyMedium;
+    Widget row(String k, String v) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 1),
+          child: Row(children: [
+            Expanded(child: Text(k, style: style)),
+            Text(v, style: style?.copyWith(fontWeight: FontWeight.w600)),
+          ]),
+        );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(_fmt(t.start),
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          if (c != null) ...[
+            row('Cranking voltage', '${c.volt.toStringAsFixed(2)} V'),
+            row('Cranking time', '${c.durationMs} ms'),
+          ],
+          row('Voltage at start', '${t.vStart.toStringAsFixed(2)} V'),
+          row('Voltage min / max',
+              '${t.vMin.toStringAsFixed(2)} / ${t.vMax.toStringAsFixed(2)} V'),
+          row('Engine on',
+              t.duration == null ? 'running / unknown' : _dur(t.duration!)),
+          if (t.stop != null) row('Stopped at', _fmt(t.stop!)),
+          row('SoC', '${t.socStart}% → ${t.socEnd != null ? '${t.socEnd}%' : '--'}'),
+          row('Temperature at start', '${t.tStart} °C'),
+          row('Rapid accel / decel', '${t.acc} / ${t.dec}'),
+        ]),
+      ),
     );
   }
 }

@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-10-30
+
+### Added
+- Start history: a `[history]` link under "Last start voltage" opens the list of
+  engine starts read from the sensor's own log (about 31 days, synced after
+  connecting and cached per device), with cranking voltage, min/max voltage,
+  engine-on time, SoC, temperature and rapid accel/decel counters.
+
+### Fixed
+- Voltage chart no longer draws a long diagonal line across a gap, such as
+  reconnecting to the sensor the next day.
+
 ## [0.4.1] - 2026-10-16
 
 ### Added
